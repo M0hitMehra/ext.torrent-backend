@@ -27,13 +27,16 @@ router.get('/browse', async (req, res) => {
 
     const cacheKey = `browse:${category.toLowerCase()}:${page}:${sort}:${order}`;
     const cached = cache.get(cacheKey);
-    if (cached) return res.json({ success: true, cached: true, ...cached });
+    if (cached && cached.torrents && cached.torrents.length > 0) {
+      return res.json({ success: true, cached: true, ...cached });
+    }
 
     let torrents = [];
     let totalPages = 1;
 
     try {
-      const result = await indexer.search({ q: category === 'all' ? '1080p' : category, category, page, sort, order });
+      const q = category === 'all' ? '1080p' : category;
+      const result = await indexer.search({ q, category, page, sort, order });
       torrents = result.torrents || [];
       totalPages = result.totalPages || 1;
     } catch (e) {
@@ -61,7 +64,10 @@ router.get('/browse', async (req, res) => {
       torrents,
     };
 
-    cache.set(cacheKey, payload, 300);
+    if (torrents.length > 0) {
+      cache.set(cacheKey, payload, 300);
+    }
+
     res.json({ success: true, cached: false, ...payload });
   } catch (err) {
     console.error('[Browse Error]', err.message);
@@ -74,7 +80,9 @@ router.get('/trending', async (req, res) => {
     const { category = 'all' } = req.query;
     const cacheKey = `trending:${category.toLowerCase()}`;
     const cached = cache.get(cacheKey);
-    if (cached) return res.json({ success: true, cached: true, ...cached });
+    if (cached && cached.torrents && cached.torrents.length > 0) {
+      return res.json({ success: true, cached: true, ...cached });
+    }
 
     let torrents = [];
 
@@ -97,7 +105,11 @@ router.get('/trending', async (req, res) => {
     }
 
     const payload = { category, count: torrents.length, torrents };
-    cache.set(cacheKey, payload, 600);
+
+    if (torrents.length > 0) {
+      cache.set(cacheKey, payload, 600);
+    }
+
     res.json({ success: true, cached: false, ...payload });
   } catch (err) {
     console.error('[Trending Error]', err.message);
@@ -110,7 +122,9 @@ router.get('/latest', async (req, res) => {
     const { page = 1 } = req.query;
     const cacheKey = `latest:${page}`;
     const cached = cache.get(cacheKey);
-    if (cached) return res.json({ success: true, cached: true, ...cached });
+    if (cached && cached.torrents && cached.torrents.length > 0) {
+      return res.json({ success: true, cached: true, ...cached });
+    }
 
     let torrents = [];
     let totalPages = 1;
@@ -135,7 +149,11 @@ router.get('/latest', async (req, res) => {
     }
 
     const payload = { page: parseInt(page), totalPages, count: torrents.length, torrents };
-    cache.set(cacheKey, payload, 180);
+
+    if (torrents.length > 0) {
+      cache.set(cacheKey, payload, 180);
+    }
+
     res.json({ success: true, cached: false, ...payload });
   } catch (err) {
     console.error('[Latest Error]', err.message);

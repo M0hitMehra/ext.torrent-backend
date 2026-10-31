@@ -20,20 +20,21 @@ router.get('/', async (req, res) => {
 
     const cacheKey = `search:${q.trim().toLowerCase()}:${page}:${category}:${sort}:${order}`;
     const cached = cache.get(cacheKey);
-    if (cached) {
+    // Only return cache if it actually contains torrents
+    if (cached && cached.torrents && cached.torrents.length > 0) {
       return res.json({ success: true, cached: true, ...cached });
     }
 
     let torrents = [];
     let totalPages = 1;
 
-    // 1. Try multi-engine indexer (ultra-fast, zero-403)
+    // 1. Multi-source indexer (Apibay + Torrents-CSV)
     try {
       const result = await indexer.search({ q, category, page, sort, order });
       torrents = result.torrents || [];
       totalPages = result.totalPages || 1;
     } catch (e) {
-      console.warn('[Indexer Search Warn]', e.message);
+      console.warn('[Indexer Search Error]', e.message);
     }
 
     // 2. If indexer had no results, attempt ext.to fallback
@@ -47,7 +48,7 @@ router.get('/', async (req, res) => {
           totalPages = result.totalPages || 1;
         }
       } catch (e) {
-        console.warn('[ext.to Scraper Warn]', e.message);
+        console.warn('[ext.to Scraper Error]', e.message);
       }
     }
 
@@ -60,7 +61,11 @@ router.get('/', async (req, res) => {
       torrents,
     };
 
-    cache.set(cacheKey, payload, 300); // Cache for 5 minutes
+    // ONLY cache if we actually have torrents!
+    if (torrents.length > 0) {
+      cache.set(cacheKey, payload, 300);
+    }
+
     res.json({ success: true, cached: false, ...payload });
   } catch (err) {
     console.error('[Search Error]', err.message);
