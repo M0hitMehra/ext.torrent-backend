@@ -38,7 +38,8 @@ app.use('/api/', limiter);
 app.get('/', (req, res) => {
   res.json({
     name: 'ext.to API Gateway',
-    version: '1.0.0',
+    version: '1.1.0',
+    engine: 'multi-source-hybrid',
     status: 'running',
     endpoints: {
       health:      'GET /',
