@@ -7,6 +7,7 @@
 
 const express = require('express');
 const router = express.Router();
+const indexer = require('../indexer');
 const { fetchHTML } = require('../scraper');
 const { parseTorrentDetail } = require('../parser');
 const cache = require('../cache');
@@ -28,21 +29,31 @@ router.get('/:id', async (req, res) => {
       return res.json({ success: true, cached: true, ...magnetCached });
     }
 
-    const paths = [`/en/${id}/`, `/torrent/${id}/`, `/en/torrent/${id}/`];
     let magnet = null;
     let infoHash = null;
 
-    for (const path of paths) {
-      try {
-        const html = await fetchHTML(path);
-        const detail = parseTorrentDetail(html);
-        if (detail.magnet) {
-          magnet = detail.magnet;
-          infoHash = detail.infoHash;
-          break;
-        }
-      } catch (e) {
-        continue;
+    // 1. Try indexer detail
+    try {
+      const d = await indexer.detail(id);
+      if (d && d.magnet) {
+        magnet = d.magnet;
+        infoHash = d.infoHash;
+      }
+    } catch (_) {}
+
+    // 2. Fallback to ext.to
+    if (!magnet) {
+      const paths = [`/en/${id}/`, `/torrent/${id}/`, `/en/torrent/${id}/`];
+      for (const path of paths) {
+        try {
+          const html = await fetchHTML(path);
+          const detail = parseTorrentDetail(html);
+          if (detail && detail.magnet) {
+            magnet = detail.magnet;
+            infoHash = detail.infoHash;
+            break;
+          }
+        } catch (_) {}
       }
     }
 

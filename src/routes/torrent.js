@@ -5,6 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
+const indexer = require('../indexer');
 const { fetchHTML } = require('../scraper');
 const { parseTorrentDetail } = require('../parser');
 const cache = require('../cache');
@@ -18,21 +19,24 @@ router.get('/:id', async (req, res) => {
     const cached = cache.get(cacheKey);
     if (cached) return res.json({ success: true, cached: true, torrent: cached });
 
-    // Try common ext.to URL patterns for torrent detail
-    const paths = [
-      `/en/${id}/`,
-      `/torrent/${id}/`,
-      `/en/torrent/${id}/`,
-    ];
-
     let detail = null;
-    for (const path of paths) {
-      try {
-        const html = await fetchHTML(path);
-        detail = parseTorrentDetail(html);
-        if (detail.title) break;
-      } catch (e) {
-        continue;
+
+    // 1. Try indexer detail
+    try {
+      detail = await indexer.detail(id);
+    } catch (e) {
+      console.warn('[Indexer Detail Warn]', e.message);
+    }
+
+    // 2. If not found, try ext.to
+    if (!detail || !detail.title) {
+      const paths = [`/en/${id}/`, `/torrent/${id}/`, `/en/torrent/${id}/`];
+      for (const path of paths) {
+        try {
+          const html = await fetchHTML(path);
+          detail = parseTorrentDetail(html);
+          if (detail && detail.title) break;
+        } catch (_) {}
       }
     }
 
@@ -40,7 +44,7 @@ router.get('/:id', async (req, res) => {
       return res.status(404).json({ success: false, error: 'Torrent not found.' });
     }
 
-    cache.set(cacheKey, detail, 600); // Cache detail for 10 minutes
+    cache.set(cacheKey, detail, 600);
     res.json({ success: true, cached: false, torrent: detail });
   } catch (err) {
     console.error('[Torrent Detail Error]', err.message);
