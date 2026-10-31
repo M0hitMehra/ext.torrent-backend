@@ -1,0 +1,21 @@
+services:
+  - type: web
+    name: extto-api
+    env: node
+    region: singapore
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: BASE_URL
+        value: https://ext.to
+      - key: CACHE_TTL
+        value: 300
+      - key: PUPPETEER_TIMEOUT
+        value: 30000
+      - key: USE_PUPPETEER
+        value: true
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: false
