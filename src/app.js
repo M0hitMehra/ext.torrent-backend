@@ -16,6 +16,7 @@ const torrentRoute    = require('./routes/torrent');
 const browseRoute     = require('./routes/browse');
 const categoriesRoute = require('./routes/categories');
 const magnetRoute     = require('./routes/magnet');
+const streamRoute     = require('./routes/stream');
 
 const app = express();
 
@@ -50,6 +51,8 @@ app.get('/', (req, res) => {
       categories:  'GET /api/categories',
       torrent:     'GET /api/torrent/:id',
       magnet:      'GET /api/magnet/:id',
+      streamMovie: 'GET /api/stream/movie/:id',
+      streamTv:    'GET /api/stream/tv/:id?s=1&e=1',
       cacheStats:  'GET /api/cache/stats',
       cacheClear:  'DELETE /api/cache',
     },
@@ -61,6 +64,7 @@ app.use('/api/search',     searchRoute);
 app.use('/api/torrent',    torrentRoute);
 app.use('/api/categories', categoriesRoute);
 app.use('/api/magnet',     magnetRoute);
+app.use('/api/stream',     streamRoute);
 
 // Browse, trending, latest share one router
 app.use('/api', browseRoute);
