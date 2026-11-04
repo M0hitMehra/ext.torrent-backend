@@ -2,9 +2,11 @@
  * indexer.js
  * Multi-source torrent aggregator & indexer.
  * Combines Apibay + Torrents-CSV for instant, reliable, non-blocked torrent search.
+ * Provides caching and multi-key lookup so any torrent ID or hash resolves reliably.
  */
 
 const axios = require('axios');
+const cache = require('./cache');
 
 const TRACKERS = [
   'udp://tracker.opentrackr.org:1337/announce',
@@ -68,16 +70,34 @@ function formatAge(timestamp) {
   return `${Math.floor(months / 12)}y ago`;
 }
 
+/**
+ * Cache torrent across all possible identifier keys for instant subsequent lookup
+ */
+function cacheTorrent(torrent) {
+  if (!torrent) return;
+  const ttl = 86400; // 24 hours
+  if (torrent.id) cache.set(`torrent:${torrent.id}`, torrent, ttl);
+  if (torrent.infoHash) {
+    cache.set(`torrent:${torrent.infoHash.toLowerCase()}`, torrent, ttl);
+  }
+  if (torrent.csvId) {
+    cache.set(`torrent:${torrent.csvId}`, torrent, ttl);
+  }
+}
+
 function transformApibay(item) {
-  if (!item || item.name === 'No results returned' || item.id === '0') return null;
+  if (!item || item.name === 'No results returned' || String(item.id) === '0') return null;
   const seeders = parseInt(item.seeders) || 0;
   const leechers = parseInt(item.leechers) || 0;
-  const infoHash = item.info_hash || '';
+  const infoHash = item.info_hash ? item.info_hash.toLowerCase().trim() : '';
+  if (!infoHash || infoHash === '0000000000000000000000000000000000000000') return null;
   const name = item.name || 'Unknown Torrent';
   const category = resolveCategory(item.category);
+  const primaryId = infoHash || String(item.id);
 
   return {
-    id: String(item.id),
+    id: primaryId,
+    apibayId: String(item.id),
     title: name,
     category,
     size: formatBytes(item.size),
@@ -89,6 +109,7 @@ function transformApibay(item) {
     infoHash,
     magnet: buildMagnet(infoHash, name),
     href: `https://apibay.org/t.php?id=${item.id}`,
+    files: [name],
     source: 'apibay',
   };
 }
@@ -97,7 +118,8 @@ function transformTorrentsCsv(item) {
   if (!item || !item.name || !item.infohash) return null;
   const seeders = parseInt(item.seeders) || 0;
   const leechers = parseInt(item.leechers) || 0;
-  const infoHash = item.infohash || '';
+  const infoHash = item.infohash ? item.infohash.toLowerCase().trim() : '';
+  if (!infoHash) return null;
   const name = item.name || 'Unknown Torrent';
 
   // Guess category from name
@@ -105,10 +127,15 @@ function transformTorrentsCsv(item) {
   const lower = name.toLowerCase();
   if (lower.includes('s0') || lower.includes('season') || lower.includes('episode')) category = 'TV Shows';
   else if (lower.includes('flac') || lower.includes('mp3') || lower.includes('album')) category = 'Music';
-  else if (lower.includes('repack') || lower.includes('game') || lower.includes('crack')) category = 'Games';
+  else if (lower.includes('repack') || lower.includes('game') || lower.includes('crack') || lower.includes('fitgirl') || lower.includes('dodi')) category = 'Games';
+  else if (lower.includes('installer') || lower.includes('.iso') || lower.includes('.exe') || lower.includes('patch')) category = 'Software';
+  else if (lower.includes('epub') || lower.includes('pdf') || lower.includes('book')) category = 'Books';
+
+  const primaryId = infoHash;
 
   return {
-    id: String(item.id || item.infohash),
+    id: primaryId,
+    csvId: item.id ? String(item.id) : null,
     title: name,
     category,
     size: formatBytes(item.size_bytes),
@@ -120,6 +147,7 @@ function transformTorrentsCsv(item) {
     infoHash,
     magnet: buildMagnet(infoHash, name),
     href: `https://torrents-csv.com`,
+    files: [name],
     source: 'torrents-csv',
   };
 }
@@ -128,7 +156,7 @@ function transformTorrentsCsv(item) {
  * Search torrents using multiple open sources simultaneously
  */
 async function search({ q, category = 'all', page = 1, sort = 'seeders', order = 'desc' }) {
-  const queryStr = q.trim();
+  const queryStr = (q || '').trim();
   const catParam = CATEGORY_MAP[category.toLowerCase()] || '0';
 
   let apibayUrl = `https://apibay.org/q.php?q=${encodeURIComponent(queryStr)}`;
@@ -136,22 +164,28 @@ async function search({ q, category = 'all', page = 1, sort = 'seeders', order =
 
   const csvUrl = `https://torrents-csv.com/service/search?q=${encodeURIComponent(queryStr)}`;
 
-  // Query both in parallel
   const [apibayRes, csvRes] = await Promise.allSettled([
-    axios.get(apibayUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 7000 }),
-    axios.get(csvUrl, { headers: { 'User-Agent': 'Mozilla/5.0' }, timeout: 7000 }),
+    axios.get(apibayUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' },
+      timeout: 7000,
+    }),
+    axios.get(csvUrl, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36' },
+      timeout: 7000,
+    }),
   ]);
 
-  let allTorrents = [];
+  const allTorrents = [];
   const seenHashes = new Set();
 
   // Process Apibay
   if (apibayRes.status === 'fulfilled' && Array.isArray(apibayRes.value?.data)) {
     for (const raw of apibayRes.value.data) {
       const t = transformApibay(raw);
-      if (t && t.infoHash && !seenHashes.has(t.infoHash.toLowerCase())) {
-        seenHashes.add(t.infoHash.toLowerCase());
+      if (t && t.infoHash && !seenHashes.has(t.infoHash)) {
+        seenHashes.add(t.infoHash);
         allTorrents.push(t);
+        cacheTorrent(t);
       }
     }
   }
@@ -160,9 +194,10 @@ async function search({ q, category = 'all', page = 1, sort = 'seeders', order =
   if (csvRes.status === 'fulfilled' && Array.isArray(csvRes.value?.data?.torrents)) {
     for (const raw of csvRes.value.data.torrents) {
       const t = transformTorrentsCsv(raw);
-      if (t && t.infoHash && !seenHashes.has(t.infoHash.toLowerCase())) {
-        seenHashes.add(t.infoHash.toLowerCase());
+      if (t && t.infoHash && !seenHashes.has(t.infoHash)) {
+        seenHashes.add(t.infoHash);
         allTorrents.push(t);
+        cacheTorrent(t);
       }
     }
   }
@@ -201,13 +236,13 @@ async function trending(category = 'all') {
     });
     if (Array.isArray(res.data)) {
       const items = res.data.map(transformApibay).filter(Boolean);
+      items.forEach(cacheTorrent);
       if (items.length > 0) return { torrents: items };
     }
   } catch (e) {
     console.warn('[Trending Apibay Warn]', e.message);
   }
 
-  // Fallback to top movies via search
   return await search({ q: category === 'all' ? '1080p' : category, category });
 }
 
@@ -225,6 +260,7 @@ async function latest(page = 1) {
 
     if (Array.isArray(res.data)) {
       const items = res.data.map(transformApibay).filter(Boolean);
+      items.forEach(cacheTorrent);
       const pageSize = 20;
       const totalPages = Math.max(1, Math.ceil(items.length / pageSize));
       const currentPage = Math.max(1, Math.min(parseInt(page) || 1, totalPages));
@@ -237,37 +273,90 @@ async function latest(page = 1) {
 }
 
 /**
- * Get single torrent full detail
+ * Get single torrent full detail by ID, hash, or query
  */
 async function detail(id) {
-  // If id is numeric, query Apibay
-  if (/^\d+$/.test(id)) {
+  if (!id) return null;
+  const idStr = String(id).trim();
+
+  // 1. Check in-memory cache first!
+  const cached = cache.get(`torrent:${idStr}`) || cache.get(`torrent:${idStr.toLowerCase()}`);
+  if (cached) return cached;
+
+  // 2. If id is a 40-character infoHash (hex)
+  const hash = idStr.replace(/[^a-fA-F0-9]/g, '').toLowerCase();
+  if (hash.length === 40) {
+    const hashCached = cache.get(`torrent:${hash}`);
+    if (hashCached) return hashCached;
+
+    // Try finding via Apibay by hash
     try {
-      const res = await axios.get(`https://apibay.org/t.php?id=${id}`, {
+      const qRes = await axios.get(`https://apibay.org/q.php?q=${hash}`, {
         headers: { 'User-Agent': 'Mozilla/5.0' },
-        timeout: 8000,
+        timeout: 6000,
       });
+      if (Array.isArray(qRes.data) && qRes.data[0] && String(qRes.data[0].id) !== '0') {
+        const item = transformApibay(qRes.data[0]);
+        if (item) {
+          cacheTorrent(item);
+          return item;
+        }
+      }
+    } catch (_) {}
 
+    // Fallback: Construct valid torrent object from hash
+    const generated = {
+      id: hash,
+      title: `Torrent (${hash.slice(0, 8)})`,
+      category: 'Movies',
+      size: 'N/A',
+      seeders: 10,
+      leechers: 2,
+      infoHash: hash,
+      magnet: buildMagnet(hash, 'Torrent'),
+      description: 'BitTorrent Media Stream',
+      files: ['media.mp4'],
+      source: 'dht',
+    };
+    cacheTorrent(generated);
+    return generated;
+  }
+
+  // 3. If id is numeric (e.g. 890, 1342)
+  if (/^\d+$/.test(idStr)) {
+    // A. Check Apibay by numeric id
+    try {
+      const res = await axios.get(`https://apibay.org/t.php?id=${idStr}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        timeout: 6000,
+      });
       const item = res.data;
-      if (item && item.name) {
-        const infoHash = item.info_hash || '';
-        const name = item.name || '';
-        const category = resolveCategory(item.category);
-
+      if (
+        item &&
+        item.id &&
+        String(item.id) !== '0' &&
+        item.name &&
+        item.name !== 'Torrent does not exsist.' &&
+        item.info_hash &&
+        item.info_hash !== '0000000000000000000000000000000000000000'
+      ) {
         let files = [];
         try {
-          const fRes = await axios.get(`https://apibay.org/f.php?id=${id}`, { timeout: 4000 });
+          const fRes = await axios.get(`https://apibay.org/f.php?id=${idStr}`, { timeout: 4000 });
           if (Array.isArray(fRes.data)) {
             files = fRes.data.map(f => (Array.isArray(f.name) ? f.name[0] : f.name || String(f)));
           }
         } catch (_) {
-          files = [name];
+          files = [item.name];
         }
 
-        return {
-          id: String(item.id),
+        const infoHash = item.info_hash.toLowerCase().trim();
+        const name = item.name;
+        const result = {
+          id: infoHash || idStr,
+          apibayId: idStr,
           title: name,
-          category,
+          category: resolveCategory(item.category),
           size: formatBytes(item.size),
           seeders: parseInt(item.seeders) || 0,
           leechers: parseInt(item.leechers) || 0,
@@ -277,27 +366,44 @@ async function detail(id) {
           magnet: buildMagnet(infoHash, name),
           description: item.descr || '',
           files,
+          source: 'apibay',
         };
+        cache.set(`torrent:${idStr}`, result, 86400);
+        cacheTorrent(result);
+        return result;
+      }
+    } catch (_) {}
+
+    // B. If Apibay doesn't have it, query torrents-csv
+    try {
+      const csvRes = await axios.get(`https://torrents-csv.com/service/search?q=${encodeURIComponent(idStr)}`, {
+        headers: { 'User-Agent': 'Mozilla/5.0' },
+        timeout: 6000,
+      });
+      if (csvRes.data && Array.isArray(csvRes.data.torrents) && csvRes.data.torrents.length > 0) {
+        const match = csvRes.data.torrents.find(t => String(t.id) === idStr) || csvRes.data.torrents[0];
+        if (match) {
+          const transformed = transformTorrentsCsv(match);
+          if (transformed) {
+            cache.set(`torrent:${idStr}`, transformed, 86400);
+            cacheTorrent(transformed);
+            return transformed;
+          }
+        }
       }
     } catch (_) {}
   }
 
-  // If id is infoHash or string
-  const hash = id.replace(/[^a-fA-F0-9]/g, '');
-  if (hash.length === 40) {
-    return {
-      id: hash,
-      title: `Torrent (${hash.slice(0, 8)})`,
-      category: 'Movies',
-      size: 'N/A',
-      seeders: 10,
-      leechers: 2,
-      infoHash: hash,
-      magnet: buildMagnet(hash, 'Torrent'),
-      description: 'Streamable torrent media',
-      files: ['media.mp4'],
-    };
-  }
+  // 4. Try general search fallback
+  try {
+    const sRes = await search({ q: idStr });
+    if (sRes && sRes.torrents && sRes.torrents.length > 0) {
+      const match = sRes.torrents[0];
+      cache.set(`torrent:${idStr}`, match, 86400);
+      cacheTorrent(match);
+      return match;
+    }
+  } catch (_) {}
 
   return null;
 }
