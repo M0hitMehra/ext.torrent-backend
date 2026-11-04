@@ -17,6 +17,7 @@ const browseRoute     = require('./routes/browse');
 const categoriesRoute = require('./routes/categories');
 const magnetRoute     = require('./routes/magnet');
 const streamRoute     = require('./routes/stream');
+const metaRoute       = require('./routes/meta');
 
 const app = express();
 
@@ -65,6 +66,7 @@ app.use('/api/torrent',    torrentRoute);
 app.use('/api/categories', categoriesRoute);
 app.use('/api/magnet',     magnetRoute);
 app.use('/api/stream',     streamRoute);
+app.use('/api/meta',       metaRoute);
 
 // Browse, trending, latest share one router
 app.use('/api', browseRoute);
