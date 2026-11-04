@@ -21,20 +21,15 @@ const metaRoute       = require('./routes/meta');
 
 const app = express();
 
+// Trust Render / Vercel reverse proxies
+app.set('trust proxy', true);
+
 // ─── Security & CORS ─────────────────────────────────────────────────────────
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(cors());
 app.use(express.json());
 
-// ─── Rate Limiting ───────────────────────────────────────────────────────────
-const limiter = rateLimit({
-  windowMs: RATE_LIMIT_WINDOW_MS,
-  max: RATE_LIMIT_MAX,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { success: false, error: 'Too many requests. Please try again later.' },
-});
-app.use('/api/', limiter);
+// ─── Rate Limiting (Disabled to allow unlimited queries from Web and App) ─────
 
 // ─── Health & Status ─────────────────────────────────────────────────────────
 app.get('/', (req, res) => {
